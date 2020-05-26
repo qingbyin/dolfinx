@@ -11,27 +11,27 @@
 
 import os
 
-import cffi
 import numba
-import numba.cffi_support
+import numba.core.typing.cffi_utils as cffi_support
 import numpy
-from mpi4py import MPI
-from petsc4py import PETSc
 
+import cffi
 import dolfinx
 import dolfinx.cpp
 import dolfinx.io
 import dolfinx.la
-from dolfinx.mesh import locate_entities_geometrical
-from dolfinx.fem import locate_dofs_topological
 import ufl
+from dolfinx.fem import locate_dofs_topological
+from dolfinx.mesh import locate_entities_boundary
+from mpi4py import MPI
+from petsc4py import PETSc
 
 filedir = os.path.dirname(__file__)
 infile = dolfinx.io.XDMFFile(MPI.COMM_WORLD,
                              os.path.join(filedir, "cooks_tri_mesh.xdmf"),
                              "r",
                              encoding=dolfinx.cpp.io.XDMFFile.Encoding.ASCII)
-mesh = infile.read_mesh("Grid")
+mesh = infile.read_mesh(name="Grid")
 infile.close()
 
 # Stress (Se) and displacement (Ue) elements
@@ -60,7 +60,7 @@ def left(x):
 
 
 # Locate all facets at the free end and assign them value 1
-free_end_facets = locate_entities_geometrical(mesh, 1, free_end, boundary_only=True)
+free_end_facets = locate_entities_boundary(mesh, 1, free_end)
 mt = dolfinx.mesh.MeshTags(mesh, 1, free_end_facets, 1)
 
 ds = ufl.Measure("ds", subdomain_data=mt)
@@ -71,7 +71,7 @@ with u_bc.vector.localForm() as loc:
     loc.set(0.0)
 
 # Displacement BC is applied to the left side
-left_facets = locate_entities_geometrical(mesh, 1, left, boundary_only=True)
+left_facets = locate_entities_boundary(mesh, 1, left)
 bdofs = locate_dofs_topological(U, 1, left_facets)
 bc = dolfinx.fem.DirichletBC(u_bc, bdofs)
 
@@ -105,8 +105,8 @@ kernel10 = ufc_form10.create_cell_integral(-1).tabulate_tensor
 
 ffi = cffi.FFI()
 
-numba.cffi_support.register_type(ffi.typeof('double _Complex'),
-                                 numba.types.complex128)
+cffi_support.register_type(ffi.typeof('double _Complex'),
+                           numba.types.complex128)
 
 c_signature = numba.types.void(
     numba.types.CPointer(numba.typeof(PETSc.ScalarType())),

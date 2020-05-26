@@ -13,18 +13,18 @@ import os
 import pathlib
 import time
 
-import cffi
 import numba
-import numba.cffi_support
+import numba.core.typing.cffi_utils as cffi_support
 import numpy as np
+
+import cffi
+import dolfinx
 import petsc4py.lib
 import pytest
-from mpi4py import MPI
-from petsc4py import PETSc
-from petsc4py import get_config as PETSc_get_config
-
-import dolfinx
 import ufl
+from mpi4py import MPI
+from petsc4py import get_config as PETSc_get_config
+from petsc4py import PETSc
 from ufl import dx, inner
 
 # Get details of PETSc install
@@ -92,8 +92,8 @@ ADD_VALUES = PETSc.InsertMode.ADD_VALUES
 
 # CFFI - register complex types
 ffi = cffi.FFI()
-numba.cffi_support.register_type(ffi.typeof('double _Complex'), numba.types.complex128)
-numba.cffi_support.register_type(ffi.typeof('float _Complex'), numba.types.complex64)
+cffi_support.register_type(ffi.typeof('double _Complex'), numba.types.complex128)
+cffi_support.register_type(ffi.typeof('float _Complex'), numba.types.complex64)
 
 # Get MatSetValuesLocal from PETSc available via cffi in ABI mode
 ffi.cdef("""int MatSetValuesLocal(void* mat, {0} nrow, const {0}* irow,
@@ -147,9 +147,9 @@ if spec is None:
     raise ImportError("Failed to find CFFI generated module")
 module = importlib.util.module_from_spec(spec)
 
-numba.cffi_support.register_module(module)
+cffi_support.register_module(module)
 MatSetValues_api = module.lib.MatSetValuesLocal
-numba.cffi_support.register_type(module.ffi.typeof("PetscScalar"), numba_scalar_t)
+cffi_support.register_type(module.ffi.typeof("PetscScalar"), numba_scalar_t)
 
 
 # See https://github.com/numba/numba/issues/4036 for why we need 'sink'
@@ -232,9 +232,9 @@ def assemble_matrix_cffi(A, mesh, dofmap, set_vals, mode):
         A_local[:] = 0.0
         for j in range(q.shape[0]):
             N[0], N[1], N[2] = 1.0 - q[j, 0] - q[j, 1], q[j, 0], q[j, 1]
-            for k in range(3):
-                for l in range(3):
-                    A_local[k, l] += weights[j] * cell_area * N[k] * N[l]
+            for row in range(3):
+                for col in range(3):
+                    A_local[row, col] += weights[j] * cell_area * N[row] * N[col]
 
         # Add to global tensor
         pos = dofmap[3 * i:3 * i + 3]
@@ -262,9 +262,9 @@ def assemble_matrix_ctypes(A, mesh, dofmap, set_vals, mode):
         A_local[:] = 0.0
         for j in range(q.shape[0]):
             N[0], N[1], N[2] = 1.0 - q[j, 0] - q[j, 1], q[j, 0], q[j, 1]
-            for k in range(3):
-                for l in range(3):
-                    A_local[k, l] += weights[j] * cell_area * N[k] * N[l]
+            for row in range(3):
+                for col in range(3):
+                    A_local[row, col] += weights[j] * cell_area * N[row] * N[col]
 
         rows = cols = dofmap[3 * i:3 * i + 3]
         set_vals(A, 3, rows.ctypes, 3, cols.ctypes, A_local.ctypes, mode)
@@ -277,7 +277,8 @@ def test_custom_mesh_loop_rank1():
     V = dolfinx.FunctionSpace(mesh, ("Lagrange", 1))
 
     # Unpack mesh and dofmap data
-    pos = mesh.geometry.dofmap.offsets()
+    num_cells = mesh.topology.index_map(mesh.topology.dim).size_local
+    pos = mesh.geometry.dofmap.offsets()[:num_cells + 1]
     x_dofs = mesh.geometry.dofmap.array()
     x = mesh.geometry.x
     dofs = V.dofmap.list.array()
@@ -338,7 +339,8 @@ def test_custom_mesh_loop_ctypes_rank2():
     V = dolfinx.FunctionSpace(mesh, ("Lagrange", 1))
 
     # Extract mesh and dofmap data
-    pos = mesh.geometry.dofmap.offsets()
+    num_cells = mesh.topology.index_map(mesh.topology.dim).size_local
+    pos = mesh.geometry.dofmap.offsets()[:num_cells + 1]
     x_dofs = mesh.geometry.dofmap.array()
     x = mesh.geometry.x
     dofs = np.array(V.dofmap.list.array(), dtype=np.dtype(PETSc.IntType))
@@ -391,7 +393,8 @@ def test_custom_mesh_loop_cffi_rank2(set_vals):
     A0.assemble()
 
     # Unpack mesh and dofmap data
-    pos = mesh.geometry.dofmap.offsets()
+    num_cells = mesh.topology.index_map(mesh.topology.dim).size_local
+    pos = mesh.geometry.dofmap.offsets()[:num_cells + 1]
     x_dofs = mesh.geometry.dofmap.array()
     x = mesh.geometry.x
     dofs = np.array(V.dofmap.list.array(), dtype=np.dtype(PETSc.IntType))

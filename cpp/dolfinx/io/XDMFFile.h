@@ -32,15 +32,15 @@ class Function;
 
 namespace mesh
 {
-class Mesh;
 class Geometry;
+enum class GhostMode : int;
+class Mesh;
 template <typename T>
 class MeshTags;
 } // namespace mesh
 
 namespace io
 {
-class HDF5File;
 
 /// Read and write mesh::Mesh, function::Function and other objects in
 /// XDMF.
@@ -91,36 +91,47 @@ public:
   /// @param[in] geometry
   /// @param[in] name
   /// @param[in] xpath XPath of a node where Geometry will be inserted
-  void write_geometry(const mesh::Geometry& geometry,
-                      const std::string name = "geometry",
+  void write_geometry(const mesh::Geometry& geometry, const std::string name,
                       const std::string xpath = "/Xdmf/Domain");
 
   /// Read in Mesh
   /// @param[in] element Element that describes the geometry of a cell
+  /// @param[in] mode The type of ghosting/halo to use for the mesh when
+  ///   distributed in parallel
   /// @param[in] name
   /// @param[in] xpath XPath where Mesh Grid is located
   /// @return A Mesh distributed on the same communicator as the
   ///   XDMFFile
   mesh::Mesh read_mesh(const fem::CoordinateElement& element,
-                       const std::string name,
+                       const mesh::GhostMode& mode, const std::string name,
                        const std::string xpath = "/Xdmf/Domain") const;
 
-  /// Read in the data for Mesh
-  /// @param[in] name
+  /// Read Topology data for Mesh
+  /// @param[in] name Name of the mesh (Grid)
   /// @param[in] xpath XPath where Mesh Grid data is located
-  /// @return (Cell type, degree), points on each process, and cells
-  ///   topology (global node indexing)
-  std::tuple<
-      std::pair<mesh::CellType, int>,
-      Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>,
-      Eigen::Array<std::int64_t, Eigen::Dynamic, Eigen::Dynamic,
-                   Eigen::RowMajor>>
-  read_mesh_data(const std::string name = "mesh",
-                 const std::string xpath = "/Xdmf/Domain") const;
+  /// @return (Cell type, degree), and cells topology (global node indexing)
+  Eigen::Array<std::int64_t, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+  read_topology_data(const std::string name,
+                     const std::string xpath = "/Xdmf/Domain") const;
+
+  /// Read Geometry data for Mesh
+  /// @param[in] name Name of the mesh (Grid)
+  /// @param[in] xpath XPath where Mesh Grid data is located
+  /// @return points on each process
+  Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+  read_geometry_data(const std::string name,
+                     const std::string xpath = "/Xdmf/Domain") const;
+
+  /// Read information about cell type
+  /// @param[in] grid_name Name of Grid for which cell type is needed
+  /// @param[in] xpath XPath where Grid is stored
+  std::pair<mesh::CellType, int> read_cell_type(const std::string grid_name,
+                                                const std::string xpath
+                                                = "/Xdmf/Domain");
 
   /// Write Function
-  /// @param[in] function
-  /// @param[in] t Time
+  /// @param[in] function The Function to write to file
+  /// @param[in] t The time stamp to associate with the Function
   /// @param[in] mesh_xpath XPath for a Grid under which Function will
   ///   be inserted
   void write_function(const function::Function& function, const double t,
@@ -133,18 +144,35 @@ public:
   ///   in file
   /// @param[in] xpath XPath where MeshTags Grid will be inserted
   void write_meshtags(const mesh::MeshTags<std::int32_t>& meshtags,
-                      const std::string geometry_xpath
-                      = "/Xdmf/Domain/Geometry",
+                      const std::string geometry_xpath,
                       const std::string xpath = "/Xdmf/Domain");
 
   /// Read MeshTags
-  /// @param[in] mesh
+  /// @param[in] mesh The Mesh that the data is defined on
   /// @param[in] name
   /// @param[in] xpath XPath where MeshTags Grid is stored in file
   mesh::MeshTags<std::int32_t>
   read_meshtags(const std::shared_ptr<const mesh::Mesh>& mesh,
                 const std::string name,
                 const std::string xpath = "/Xdmf/Domain");
+
+  /// Write Information
+  /// @param[in] name
+  /// @param[in] value String to store into Information tag
+  /// @param[in] xpath XPath where Information will be inserted
+  void write_information(const std::string name, const std::string value,
+                         const std::string xpath = "/Xdmf/Domain/");
+
+  /// Read Information
+  /// @param[in] name
+  /// @param[in] xpath XPath where Information is stored in file
+  std::string read_information(const std::string name,
+                               const std::string xpath = "/Xdmf/Domain/");
+
+  /// Flush XML and HDF files
+  /// Call this explicitly after each write operation to assure integrity of
+  /// files in case of interruption
+  void flush() const;
 
   /// Get the MPI communicator
   /// @return The MPI communicator for the file object

@@ -55,8 +55,11 @@ def test_read_mesh_data(tempdir, tdim, n):
     with XDMFFile(mesh.mpi_comm(), filename, "w", encoding) as file:
         file.write_mesh(mesh)
 
+    MPI.COMM_WORLD.Barrier()
     with XDMFFile(MPI.COMM_WORLD, filename, "r") as file:
-        cell_type, x, cells = file.read_mesh_data()
+        cell_type = file.read_cell_type()
+        cells = file.read_topology_data()
+        x = file.read_geometry_data()
 
     assert cell_type[0] == mesh.topology.cell_type
     assert cell_type[1] == 1
