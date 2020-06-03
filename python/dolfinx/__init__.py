@@ -41,7 +41,7 @@ from dolfinx.generation import (IntervalMesh, BoxMesh, RectangleMesh,
                                UnitIntervalMesh, UnitSquareMesh, UnitCubeMesh)
 
 from dolfinx.mesh import Mesh
-from .cpp.mesh import Topology, Geometry, MeshEntity, MeshQuality
+from .cpp.mesh import Topology, Geometry
 
 from .cpp.nls import (NonlinearProblem, NewtonSolver)
 
@@ -51,8 +51,6 @@ from .fem.solving import solve
 
 from .function import (FunctionSpace, VectorFunctionSpace,
                        TensorFunctionSpace, Constant, Function)
-from .specialfunctions import (FacetNormal, CellVolume, CellNormal,
-                               CellDiameter, Circumradius)
 
 from .mesh import MeshTags
 

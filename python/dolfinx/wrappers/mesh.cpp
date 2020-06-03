@@ -1,4 +1,4 @@
-// Copyright (C) 2017-2019 Chris N. Richardson and Garth N. Wells
+// Copyright (C) 2017-2020 Chris N. Richardson and Garth N. Wells
 //
 // This file is part of DOLFINX (https://www.fenicsproject.org)
 //
@@ -12,8 +12,6 @@
 #include <dolfinx/fem/ElementDofLayout.h>
 #include <dolfinx/mesh/Geometry.h>
 #include <dolfinx/mesh/Mesh.h>
-#include <dolfinx/mesh/MeshEntity.h>
-#include <dolfinx/mesh/MeshQuality.h>
 #include <dolfinx/mesh/MeshTags.h>
 #include <dolfinx/mesh/Partitioning.h>
 #include <dolfinx/mesh/Topology.h>
@@ -48,14 +46,13 @@ void mesh(py::module& m)
   m.def("to_type", &dolfinx::mesh::to_type);
   m.def("is_simplex", &dolfinx::mesh::is_simplex);
 
+  m.def("cell_entity_type", &dolfinx::mesh::cell_entity_type);
   m.def("cell_dim", &dolfinx::mesh::cell_dim);
   m.def("cell_num_entities", &dolfinx::mesh::cell_num_entities);
   m.def("cell_num_vertices", &dolfinx::mesh::num_cell_vertices);
   m.def("get_entity_vertices", &dolfinx::mesh::get_entity_vertices);
 
   m.def("extract_topology", &dolfinx::mesh::extract_topology);
-
-  m.def("compute_interior_facets", &dolfinx::mesh::compute_interior_facets);
 
   m.def("volume_entities", &dolfinx::mesh::volume_entities,
         "Generalised volume of entities of given dimension.");
@@ -66,16 +63,18 @@ void mesh(py::module& m)
   m.def("inradius", &dolfinx::mesh::inradius, "Compute inradius of cells.");
   m.def("radius_ratio", &dolfinx::mesh::radius_ratio);
   m.def("midpoints", &dolfinx::mesh::midpoints);
+  m.def("compute_boundary_facets", &dolfinx::mesh::compute_boundary_facets);
 
   m.def(
-      "create",
+      "create_mesh",
       [](const MPICommWrapper comm,
          const dolfinx::graph::AdjacencyList<std::int64_t>& cells,
          const dolfinx::fem::CoordinateElement& element,
          const Eigen::Ref<const Eigen::Array<
              double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>& x,
          dolfinx::mesh::GhostMode ghost_mode) {
-        return dolfinx::mesh::create(comm.get(), cells, element, x, ghost_mode);
+        return dolfinx::mesh::create_mesh(comm.get(), cells, element, x,
+                                          ghost_mode);
       },
       "Helper function for creating meshes.");
 
@@ -132,7 +131,6 @@ void mesh(py::module& m)
       }))
       .def("set_connectivity", &dolfinx::mesh::Topology::set_connectivity)
       .def("set_index_map", &dolfinx::mesh::Topology::set_index_map)
-      .def("set_interior_facets", &dolfinx::mesh::Topology::set_interior_facets)
       .def("create_entities", &dolfinx::mesh::Topology::create_entities)
       .def("create_entity_permutations",
            &dolfinx::mesh::Topology::create_entity_permutations)
@@ -149,16 +147,15 @@ void mesh(py::module& m)
            py::overload_cast<int, int>(&dolfinx::mesh::Topology::connectivity,
                                        py::const_))
       .def("hash", &dolfinx::mesh::Topology::hash)
-      .def("on_boundary", &dolfinx::mesh::Topology::on_boundary)
       .def("index_map", &dolfinx::mesh::Topology::index_map)
       .def_property_readonly("cell_type", &dolfinx::mesh::Topology::cell_type)
-      .def("cell_name", [](const dolfinx::mesh::Topology& self) {
-        return dolfinx::mesh::to_string(self.cell_type());
-      })
-      .def("mpi_comm",
-           [](dolfinx::mesh::Mesh& self) {
-             return MPICommWrapper(self.mpi_comm());
-       });
+      .def("cell_name",
+           [](const dolfinx::mesh::Topology& self) {
+             return dolfinx::mesh::to_string(self.cell_type());
+           })
+      .def("mpi_comm", [](dolfinx::mesh::Mesh& self) {
+        return MPICommWrapper(self.mpi_comm());
+      });
 
   // dolfinx::mesh::Mesh
   py::class_<dolfinx::mesh::Mesh, std::shared_ptr<dolfinx::mesh::Mesh>>(
@@ -169,21 +166,6 @@ void mesh(py::module& m)
         return std::make_unique<dolfinx::mesh::Mesh>(comm.get(), topology,
                                                      geometry);
       }))
-      .def(py::init(
-          [](const MPICommWrapper comm, dolfinx::mesh::CellType type,
-             const Eigen::Ref<const Eigen::Array<
-                 double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>&
-                 geometry,
-             const Eigen::Ref<
-                 const Eigen::Array<std::int64_t, Eigen::Dynamic,
-                                    Eigen::Dynamic, Eigen::RowMajor>>& topology,
-             const dolfinx::fem::CoordinateElement& element,
-             const std::vector<std::int64_t>& global_cell_indices,
-             const dolfinx::mesh::GhostMode ghost_mode) {
-            return std::make_unique<dolfinx::mesh::Mesh>(
-                comm.get(), type, geometry, topology, element,
-                global_cell_indices, ghost_mode);
-          }))
       .def_property_readonly(
           "geometry", py::overload_cast<>(&dolfinx::mesh::Mesh::geometry),
           "Mesh geometry")
@@ -202,20 +184,6 @@ void mesh(py::module& m)
       .def("ufl_id", &dolfinx::mesh::Mesh::id)
       .def_property_readonly("id", &dolfinx::mesh::Mesh::id)
       .def_readwrite("name", &dolfinx::mesh::Mesh::name);
-
-  // dolfinx::mesh::MeshEntity class
-  py::class_<dolfinx::mesh::MeshEntity,
-             std::shared_ptr<dolfinx::mesh::MeshEntity>>(m, "MeshEntity",
-                                                         "MeshEntity object")
-      .def(py::init<const dolfinx::mesh::Mesh&, std::size_t, std::size_t>())
-      .def_property_readonly("dim", &dolfinx::mesh::MeshEntity::dim,
-                             "Topological dimension")
-      .def("mesh", &dolfinx::mesh::MeshEntity::mesh, "Associated mesh")
-      .def("index",
-           py::overload_cast<>(&dolfinx::mesh::MeshEntity::index, py::const_),
-           "Entity index")
-      .def("entities", &dolfinx::mesh::MeshEntity::entities,
-           py::return_value_policy::reference_internal);
 
 // dolfinx::mesh::MeshTags
 #define MESHTAGS_MACRO(SCALAR, SCALAR_NAME)                                    \
@@ -246,21 +214,24 @@ void mesh(py::module& m)
           "indices", [](dolfinx::mesh::MeshTags<SCALAR>& self) {               \
             return py::array_t<std::int32_t>(                                  \
                 self.indices().size(), self.indices().data(), py::none());     \
-          });
+          });                                                                  \
+                                                                               \
+  m.def("create_meshtags",                                                     \
+        [](const std::shared_ptr<const dolfinx::mesh::Mesh>& mesh,             \
+           const int dim,                                                      \
+           const dolfinx::graph::AdjacencyList<std::int32_t>& entities,        \
+           const py::array_t<SCALAR>& values) {                                \
+          py::buffer_info buf = values.request();                              \
+          std::vector<SCALAR> vals((SCALAR*)buf.ptr,                           \
+                                   (SCALAR*)buf.ptr + buf.size);               \
+          return dolfinx::mesh::create_meshtags(mesh, dim, entities, vals);    \
+        });
 
   MESHTAGS_MACRO(std::int8_t, int8);
   MESHTAGS_MACRO(int, int);
   MESHTAGS_MACRO(double, double);
   MESHTAGS_MACRO(std::int64_t, int64);
 #undef MESHTAGS_MACRO
-
-  // dolfinx::mesh::MeshQuality
-  py::class_<dolfinx::mesh::MeshQuality>(m, "MeshQuality", "MeshQuality class")
-      .def_static("dihedral_angle_histogram_data",
-                  &dolfinx::mesh::MeshQuality::dihedral_angle_histogram_data,
-                  py::arg("mesh"), py::arg("num_bins") = 50)
-      .def_static("dihedral_angles_min_max",
-                  &dolfinx::mesh::MeshQuality::dihedral_angles_min_max);
 
   // Partitioning interface
   m.def("partition_cells",
@@ -272,12 +243,8 @@ void mesh(py::module& m)
               comm.get(), nparts, cell_type, cells, ghost_mode);
         });
 
-  m.def("locate_entities_geometrical",
-        &dolfinx::mesh::locate_entities_geometrical);
-
-  // TODO Remove
-  m.def("compute_vertex_exterior_markers",
-        &dolfinx::mesh::Partitioning::compute_vertex_exterior_markers);
+  m.def("locate_entities", &dolfinx::mesh::locate_entities);
+  m.def("locate_entities_boundary", &dolfinx::mesh::locate_entities_boundary);
 
 } // namespace dolfinx_wrappers
 } // namespace dolfinx_wrappers

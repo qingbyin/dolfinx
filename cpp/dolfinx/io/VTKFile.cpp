@@ -8,7 +8,6 @@
 #include "VTKWriter.h"
 #include "pugixml.hpp"
 #include <boost/cstdint.hpp>
-#include <boost/detail/endian.hpp>
 #include <dolfinx/common/IndexMap.h>
 #include <dolfinx/common/MPI.h>
 #include <dolfinx/common/Timer.h>
@@ -20,7 +19,6 @@
 #include <dolfinx/la/PETScVector.h>
 #include <dolfinx/mesh/Geometry.h>
 #include <dolfinx/mesh/Mesh.h>
-#include <dolfinx/mesh/MeshEntity.h>
 #include <iomanip>
 #include <ostream>
 #include <sstream>
@@ -174,18 +172,19 @@ std::string init(const mesh::Mesh& mesh, const std::string filename,
 void write_function(const function::Function& u, const std::string filename,
                     const std::size_t counter, double time)
 {
-  assert(u.function_space()->mesh());
-  const mesh::Mesh& mesh = *u.function_space()->mesh();
+  assert(u.function_space());
+  std::shared_ptr<const mesh::Mesh> mesh = u.function_space()->mesh();
+  assert(mesh);
 
   // Get MPI communicator
-  const MPI_Comm mpi_comm = mesh.mpi_comm();
+  const MPI_Comm mpi_comm = mesh->mpi_comm();
 
   // Get vtu file name and initialise
   std::string vtu_filename
-      = init(mesh, filename, counter, mesh.topology().dim());
+      = init(*mesh, filename, counter, mesh->topology().dim());
 
   // Write mesh
-  VTKWriter::write_mesh(mesh, mesh.topology().dim(), vtu_filename);
+  VTKWriter::write_mesh(*mesh, mesh->topology().dim(), vtu_filename);
 
   // Write results
   results_write(u, vtu_filename);
@@ -277,19 +276,20 @@ void results_write(const function::Function& u, std::string vtu_filename)
   }
 
   // Test for cell-based element type
-  assert(u.function_space()->mesh());
-  const mesh::Mesh& mesh = *u.function_space()->mesh();
+  assert(u.function_space());
+  std::shared_ptr<const mesh::Mesh> mesh = u.function_space()->mesh();
+  assert(mesh);
   int cell_based_dim = 1;
   for (std::size_t i = 0; i < rank; i++)
-    cell_based_dim *= mesh.topology().dim();
+    cell_based_dim *= mesh->topology().dim();
 
-  assert(u.function_space()->dofmap());
-  const fem::DofMap& dofmap = *u.function_space()->dofmap();
-  assert(dofmap.element_dof_layout);
-  if (dofmap.element_dof_layout->num_dofs() == cell_based_dim)
+  std::shared_ptr<const fem::DofMap> dofmap = u.function_space()->dofmap();
+  assert(dofmap);
+  assert(dofmap->element_dof_layout);
+  if (dofmap->element_dof_layout->num_dofs() == cell_based_dim)
     VTKWriter::write_cell_data(u, vtu_filename);
   else
-    write_point_data(u, mesh, vtu_filename);
+    write_point_data(u, *mesh, vtu_filename);
 }
 //----------------------------------------------------------------------------
 void write_point_data(const function::Function& u, const mesh::Mesh& mesh,
@@ -569,15 +569,17 @@ void pvtu_write(const function::Function& u, const std::string filename,
   const int dim = u.value_size();
 
   // Get mesh
-  assert(u.function_space()->mesh());
-  const mesh::Mesh& mesh = *(u.function_space()->mesh());
+  assert(u.function_space());
+  std::shared_ptr<const mesh::Mesh> mesh = u.function_space()->mesh();
+  assert(mesh);
 
   // Test for cell-based element type
   std::string data_type = "point";
   int cell_based_dim = 1;
   assert(u.function_space()->dofmap());
   for (int i = 0; i < rank; i++)
-    cell_based_dim *= mesh.topology().dim();
+    cell_based_dim *= mesh->topology().dim();
+  assert(u.function_space()->dofmap());
   assert(u.function_space()->dofmap()->element_dof_layout);
   if (u.function_space()->dofmap()->element_dof_layout->num_dofs()
       == cell_based_dim)
@@ -585,7 +587,7 @@ void pvtu_write(const function::Function& u, const std::string filename,
     data_type = "cell";
   }
 
-  const int num_processes = dolfinx::MPI::size(mesh.mpi_comm());
+  const int num_processes = dolfinx::MPI::size(mesh->mpi_comm());
   pvtu_write_function(dim, rank, data_type, "u", filename, fname, counter,
                       num_processes);
 }

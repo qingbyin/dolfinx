@@ -52,15 +52,159 @@ void local_to_global_impl(
   }
 }
 //-----------------------------------------------------------------------------
+std::vector<int> get_ghost_ranks(
+    dolfinx::MPI::Comm mpi_comm, std::int32_t local_size,
+    const Eigen::Ref<const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>>&
+        ghosts)
+{
+  int mpi_size = -1;
+  MPI_Comm_size(mpi_comm.comm(), &mpi_size);
+  std::vector<std::int32_t> local_sizes(mpi_size);
+  MPI_Allgather(&local_size, 1, MPI_INT32_T, local_sizes.data(), 1, MPI_INT32_T,
+                mpi_comm.comm());
+
+  std::vector<std::int64_t> all_ranges(mpi_size + 1, 0);
+  std::partial_sum(local_sizes.begin(), local_sizes.end(),
+                   all_ranges.begin() + 1);
+
+  // Compute rank of ghost owners
+  std::vector<int> ghost_ranks(ghosts.size(), -1);
+  for (int i = 0; i < ghosts.size(); ++i)
+  {
+    auto it = std::upper_bound(all_ranges.begin(), all_ranges.end(), ghosts[i]);
+    const int p = std::distance(all_ranges.begin(), it) - 1;
+    ghost_ranks[i] = p;
+  }
+
+  return ghost_ranks;
+}
+//-----------------------------------------------------------------------------
 } // namespace
 
 //-----------------------------------------------------------------------------
+std::tuple<std::int64_t, std::vector<std::int32_t>,
+           std::vector<std::vector<std::int64_t>>,
+           std::vector<std::vector<int>>>
+common::stack_index_maps(
+    const std::vector<std::reference_wrapper<const common::IndexMap>>& maps)
+{
+
+  // Get process offset
+  std::int64_t process_offset = 0;
+  for (const common::IndexMap& map : maps)
+    process_offset += map.local_range()[0] * map.block_size();
+
+  // Get local map offset
+  std::vector<std::int32_t> local_offset(maps.size() + 1, 0);
+  for (std::size_t f = 1; f < local_offset.size(); ++f)
+  {
+    local_offset[f]
+        = local_offset[f - 1]
+          + maps[f - 1].get().size_local() * maps[f - 1].get().block_size();
+  }
+
+  // Pack old and new composite indices for owned entries that are ghost
+  // on other ranks
+  std::vector<std::int64_t> indices;
+  for (std::size_t f = 0; f < maps.size(); ++f)
+  {
+    const int bs = maps[f].get().block_size();
+    const std::vector<std::int32_t>& forward_indices
+        = maps[f].get().forward_indices();
+    const std::int64_t offset = bs * maps[f].get().local_range()[0];
+    for (std::int32_t local_index : forward_indices)
+    {
+      for (std::int32_t i = 0; i < bs; ++i)
+      {
+        // Insert field index, global index, composite global index
+        indices.push_back(f);
+        indices.push_back(bs * local_index + i + offset);
+        indices.push_back(bs * local_index + i + local_offset[f]
+                          + process_offset);
+      }
+    }
+  }
+
+  // Build array of neighbourhood ranks
+  std::set<std::int32_t> neighbour_set;
+  for (const common::IndexMap& map : maps)
+  {
+    const std::vector<std::int32_t>& n = map.neighbours();
+    neighbour_set.insert(n.begin(), n.end());
+  }
+  const std::vector<int> neighbours(neighbour_set.begin(), neighbour_set.end());
+
+  // Create neighbourhood communicator
+  MPI_Comm comm;
+  MPI_Dist_graph_create_adjacent(maps.at(0).get().mpi_comm(), neighbours.size(),
+                                 neighbours.data(), MPI_UNWEIGHTED,
+                                 neighbours.size(), neighbours.data(),
+                                 MPI_UNWEIGHTED, MPI_INFO_NULL, false, &comm);
+
+  int num_neighbours(-1), outdegree(-2), weighted(-1);
+  MPI_Dist_graph_neighbors_count(comm, &num_neighbours, &outdegree, &weighted);
+  assert(num_neighbours == outdegree);
+
+  // Figure out how much data to receive from each neighbour
+  const int num_my_rows = indices.size();
+  std::vector<int> num_rows_recv(num_neighbours);
+  MPI_Neighbor_allgather(&num_my_rows, 1, MPI_INT, num_rows_recv.data(), 1,
+                         MPI_INT, comm);
+
+  // Compute displacements for data to receive
+  std::vector<int> disp(num_neighbours + 1, 0);
+  std::partial_sum(num_rows_recv.begin(), num_rows_recv.end(),
+                   disp.begin() + 1);
+
+  // Send data to neighbours, and receive data
+  std::vector<std::int64_t> data_recv(disp.back());
+  MPI_Neighbor_allgatherv(indices.data(), indices.size(), MPI_INT64_T,
+                          data_recv.data(), num_rows_recv.data(), disp.data(),
+                          MPI_INT64_T, comm);
+
+  // Destroy communicator
+  MPI_Comm_free(&comm);
+
+  // Create map (old global index -> new global index) for each field
+  std::vector<std::map<int64_t, std::int64_t>> ghost_maps(maps.size());
+  for (std::size_t i = 0; i < data_recv.size(); i += 3)
+    ghost_maps[data_recv[i]].insert({data_recv[i + 1], data_recv[i + 2]});
+
+  /// Build arrays from old ghost index to composite ghost index for
+  /// each field
+  std::vector<std::vector<std::int64_t>> ghosts_new(maps.size());
+  std::vector<std::vector<int>> ghost_onwers_new(maps.size());
+  for (std::size_t f = 0; f < maps.size(); ++f)
+  {
+    const int bs = maps[f].get().block_size();
+    const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>& ghosts
+        = maps[f].get().ghosts();
+    const Eigen::Array<int, Eigen::Dynamic, 1>& ghost_owners
+        = maps[f].get().ghost_owners();
+    for (Eigen::Index i = 0; i < ghosts.rows(); ++i)
+    {
+      for (int j = 0; j < bs; ++j)
+      {
+        auto it = ghost_maps[f].find(bs * ghosts[i] + j);
+        assert(it != ghost_maps[f].end());
+        ghosts_new[f].push_back(it->second);
+        ghost_onwers_new[f].push_back(ghost_owners[i]);
+      }
+    }
+  }
+
+  return {process_offset, std::move(local_offset), std::move(ghosts_new),
+          std::move(ghost_onwers_new)};
+}
+//-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 IndexMap::IndexMap(MPI_Comm mpi_comm, std::int32_t local_size,
-                   const std::vector<std::int64_t>& ghosts, int block_size)
+                   const std::vector<std::int64_t>& ghosts,
+                   const std::vector<int>& ghost_ranks, int block_size)
     : IndexMap(mpi_comm, local_size,
                Eigen::Map<const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>>(
                    ghosts.data(), ghosts.size()),
-               block_size)
+               ghost_ranks, block_size)
 {
   // Do nothing
 }
@@ -69,31 +213,26 @@ IndexMap::IndexMap(
     MPI_Comm mpi_comm, std::int32_t local_size,
     const Eigen::Ref<const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>>&
         ghosts,
-    int block_size)
+    const std::vector<int>& ghost_ranks, int block_size)
     : _block_size(block_size), _mpi_comm(mpi_comm),
       _myrank(MPI::rank(mpi_comm)), _ghosts(ghosts),
       _ghost_owners(ghosts.size())
 {
-  // Calculate offsets
+
+  assert(size_t(ghosts.size()) == ghost_ranks.size());
+
   int mpi_size = -1;
-  MPI_Comm_size(mpi_comm, &mpi_size);
-  std::vector<std::int32_t> local_sizes(mpi_size);
-  MPI_Allgather(&local_size, 1, MPI_INT32_T, local_sizes.data(), 1, MPI_INT32_T,
-                mpi_comm);
+  MPI_Comm_size(_mpi_comm.comm(), &mpi_size);
 
-  _all_ranges = {0};
-  for (int i = 0; i < mpi_size; ++i)
-    _all_ranges.push_back(_all_ranges.back() + local_sizes[i]);
+#ifdef DEBUG
+  assert(ghost_ranks == get_ghost_ranks(_mpi_comm, local_size, _ghosts));
+#endif
 
-  // Compute number of outgoing edges (ghost -> owner) to each remote
-  // processes
-  std::vector<int> ghost_owner_global(ghosts.size(), -1);
   std::vector<std::int32_t> num_edges_out_per_proc(mpi_size, 0);
   for (int i = 0; i < ghosts.size(); ++i)
   {
-    const int p = owner(ghosts[i]);
-    ghost_owner_global[i] = p;
-    if (ghost_owner_global[i] == _myrank)
+    auto p = ghost_ranks[i];
+    if (p == _myrank)
     {
       throw std::runtime_error("IndexMap Error: Ghost in local range. Rank = "
                                + std::to_string(_myrank)
@@ -101,6 +240,17 @@ IndexMap::IndexMap(
     }
     num_edges_out_per_proc[p] += 1;
   }
+
+  // Get global offset (index), using partial exclusive reduction
+  std::int64_t offset = 0;
+  std::int64_t size_local = (std::int64_t)local_size;
+  MPI_Exscan(&size_local, &offset, 1, MPI_INT64_T, MPI_SUM, _mpi_comm.comm());
+  _local_range = {offset, offset + local_size};
+
+  // Each MPI process sends its local size to reduction
+  MPI_Request request;
+  MPI_Iallreduce(&size_local, &_size_global, 1, MPI_INT64_T, MPI_SUM,
+                 _mpi_comm.comm(), &request);
 
   // Send number of outgoing edges (ghost -> owner) to target processes,
   // and receive number of incoming edges (ghost <- owner) from each
@@ -160,7 +310,7 @@ IndexMap::IndexMap(
   for (int j = 0; j < _ghosts.size(); ++j)
   {
     // Get rank of owner process rank on global communicator
-    const int p = ghost_owner_global[j];
+    const int p = ghost_ranks[j];
 
     // Get rank of owner on neighbourhood communicator
     const auto it = std::find(_neighbours.begin(), _neighbours.end(), p);
@@ -171,7 +321,7 @@ IndexMap::IndexMap(
     _ghost_owners[j] = np;
 
     // Local on owning process
-    out_indices[disp[np]] = _ghosts[j] - _all_ranges[p];
+    out_indices[disp[np]] = _ghosts[j];
     disp[np] += 1;
   }
 
@@ -183,14 +333,19 @@ IndexMap::IndexMap(
       in_edges_num.data(), disp_in.data(), MPI_INT, neighbour_comm);
 
   _forward_indices = std::move(indices_in);
+  for (auto& value : _forward_indices)
+    value -= offset;
   _forward_sizes = std::move(in_edges_num);
+
+  // Wait for the MPI_Iallreduce to complete
+  MPI_Wait(&request, MPI_STATUS_IGNORE);
 
   MPI_Comm_free(&neighbour_comm);
 }
 //-----------------------------------------------------------------------------
 std::array<std::int64_t, 2> IndexMap::local_range() const
 {
-  return {{_all_ranges[_myrank], _all_ranges[_myrank + 1]}};
+  return _local_range;
 }
 //-----------------------------------------------------------------------------
 int IndexMap::block_size() const { return _block_size; }
@@ -199,10 +354,10 @@ std::int32_t IndexMap::num_ghosts() const { return _ghosts.rows(); }
 //-----------------------------------------------------------------------------
 std::int32_t IndexMap::size_local() const
 {
-  return _all_ranges[_myrank + 1] - _all_ranges[_myrank];
+  return _local_range[1] - _local_range[0];
 }
 //-----------------------------------------------------------------------------
-std::int64_t IndexMap::size_global() const { return _all_ranges.back(); }
+std::int64_t IndexMap::size_global() const { return _size_global; }
 //-----------------------------------------------------------------------------
 const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>& IndexMap::ghosts() const
 {
@@ -214,9 +369,8 @@ Eigen::Array<std::int64_t, Eigen::Dynamic, 1> IndexMap::local_to_global(
         indices,
     bool blocked) const
 {
-  const std::int64_t global_offset = _all_ranges[_myrank];
-  const std::int32_t local_size
-      = _all_ranges[_myrank + 1] - _all_ranges[_myrank];
+  const std::int64_t global_offset = _local_range[0];
+  const std::int32_t local_size = _local_range[1] - _local_range[0];
   Eigen::Array<std::int64_t, Eigen::Dynamic, 1> global(indices.rows());
   local_to_global_impl(global, indices, global_offset, local_size, _block_size,
                        _ghosts, blocked);
@@ -228,9 +382,8 @@ std::vector<std::int64_t>
 IndexMap::local_to_global(const std::vector<std::int32_t>& indices,
                           bool blocked) const
 {
-  const std::int64_t global_offset = _all_ranges[_myrank];
-  const std::int32_t local_size
-      = _all_ranges[_myrank + 1] - _all_ranges[_myrank];
+  const std::int64_t global_offset = _local_range[0];
+  const std::int32_t local_size = _local_range[1] - _local_range[0];
 
   std::vector<std::int64_t> global(indices.size());
   Eigen::Map<Eigen::Array<std::int64_t, Eigen::Dynamic, 1>> _global(
@@ -244,10 +397,9 @@ IndexMap::local_to_global(const std::vector<std::int32_t>& indices,
 //-----------------------------------------------------------------------------
 std::vector<std::int64_t> IndexMap::global_indices(bool blocked) const
 {
-  const std::int32_t local_size
-      = _all_ranges[_myrank + 1] - _all_ranges[_myrank];
+  const std::int32_t local_size = _local_range[1] - _local_range[0];
   const std::int32_t num_ghosts = _ghosts.rows();
-  const std::int64_t global_offset = _all_ranges[_myrank];
+  const std::int64_t global_offset = _local_range[0];
   const int bs = blocked ? 1 : _block_size;
 
   std::vector<std::int64_t> global(bs * (local_size + num_ghosts));
@@ -276,8 +428,7 @@ std::vector<std::int32_t> IndexMap::global_to_local(
         indices,
     bool blocked) const
 {
-  const std::int32_t local_size
-      = _all_ranges[_myrank + 1] - _all_ranges[_myrank];
+  const std::int32_t local_size = _local_range[1] - _local_range[0];
 
   std::vector<std::pair<std::int64_t, std::int32_t>> global_local_ghosts;
   for (Eigen::Index i = 0; i < _ghosts.rows(); ++i)
@@ -296,22 +447,17 @@ std::vector<std::int32_t> IndexMap::global_to_local(
     else
     {
       const std::int64_t index_block = index / bs;
-      auto it = global_to_local.find(index_block);
-      if (it != global_to_local.end())
+      if (auto it = global_to_local.find(index_block);
+          it != global_to_local.end())
+      {
         local.push_back(it->second * bs + index % bs);
+      }
       else
         local.push_back(-1);
     }
   }
 
   return local;
-}
-//-----------------------------------------------------------------------------
-int IndexMap::owner(std::int64_t global_index) const
-{
-  auto it
-      = std::upper_bound(_all_ranges.begin(), _all_ranges.end(), global_index);
-  return std::distance(_all_ranges.begin(), it) - 1;
 }
 //-----------------------------------------------------------------------------
 Eigen::Array<std::int32_t, Eigen::Dynamic, 1> IndexMap::ghost_owners() const
