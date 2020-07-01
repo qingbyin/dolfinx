@@ -165,7 +165,7 @@ private:
                     const std::uint32_t)>
       _transform_reference_basis_derivatives;
 
-  std::function<int(PetscScalar*, const double*, const double*,
+  std::function<int(PetscScalar*, const PetscScalar*, const double*,
                     const ufc_coordinate_mapping*)>
       _transform_values;
 };
