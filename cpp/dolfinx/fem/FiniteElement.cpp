@@ -188,10 +188,9 @@ FiniteElement::dof_reference_coordinates() const
 }
 //-----------------------------------------------------------------------------
 void FiniteElement::transform_values(
-    PetscScalar* reference_values,
-    const Eigen::Ref<const Eigen::Array<PetscScalar, Eigen::Dynamic,
-                                        Eigen::Dynamic, Eigen::RowMajor>>&
-        physical_values,
+    double* reference_values,
+    const Eigen::Ref<const Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic,
+                                        Eigen::RowMajor>>& physical_values,
     const Eigen::Ref<const Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic,
                                         Eigen::RowMajor>>& coordinate_dofs)
     const

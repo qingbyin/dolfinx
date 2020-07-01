@@ -10,7 +10,6 @@
 #include <dolfinx/mesh/cell_types.h>
 #include <functional>
 #include <memory>
-#include <petscsys.h>
 #include <unsupported/Eigen/CXX11/Tensor>
 #include <vector>
 
@@ -111,8 +110,8 @@ public:
   /// Map values of field from physical to reference space which has
   /// been evaluated at points given by dof_reference_coordinates()
   void transform_values(
-      PetscScalar* reference_values,
-      const Eigen::Ref<const Eigen::Array<PetscScalar, Eigen::Dynamic,
+      double* reference_values,
+      const Eigen::Ref<const Eigen::Array<double, Eigen::Dynamic,
                                           Eigen::Dynamic, Eigen::RowMajor>>&
           physical_values,
       const Eigen::Ref<const Eigen::Array<double, Eigen::Dynamic,
@@ -164,7 +163,7 @@ private:
                     const std::uint32_t)>
       _transform_reference_basis_derivatives;
 
-  std::function<int(ufc_scalar_t*, const ufc_scalar_t*, const double*,
+  std::function<int(double*, const double*, const double*,
                     const ufc_coordinate_mapping*)>
       _transform_values;
 };
