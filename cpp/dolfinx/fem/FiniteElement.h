@@ -107,11 +107,13 @@ public:
   const Eigen::Array<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>&
   dof_reference_coordinates() const;
 
+  /// @todo Remove this function and re-implement functionality
+  ///
   /// Map values of field from physical to reference space which has
   /// been evaluated at points given by dof_reference_coordinates()
   void transform_values(
-      double* reference_values,
-      const Eigen::Ref<const Eigen::Array<double, Eigen::Dynamic,
+      ufc_scalar_t* reference_values,
+      const Eigen::Ref<const Eigen::Array<PetscScalar, Eigen::Dynamic,
                                           Eigen::Dynamic, Eigen::RowMajor>>&
           physical_values,
       const Eigen::Ref<const Eigen::Array<double, Eigen::Dynamic,
