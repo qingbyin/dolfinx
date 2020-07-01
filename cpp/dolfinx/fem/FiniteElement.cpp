@@ -188,7 +188,7 @@ FiniteElement::dof_reference_coordinates() const
 }
 //-----------------------------------------------------------------------------
 void FiniteElement::transform_values(
-    ufc_scalar_t* reference_values,
+    PetscScalar* reference_values,
     const Eigen::Ref<const Eigen::Array<PetscScalar, Eigen::Dynamic,
                                         Eigen::Dynamic, Eigen::RowMajor>>&
         physical_values,
