@@ -6,6 +6,7 @@
 
 #include "FunctionSpace.h"
 #include "Function.h"
+#include "interpolate.h"
 #include <dolfinx/common/IndexMap.h>
 #include <dolfinx/common/UniqueIdGenerator.h>
 #include <dolfinx/common/types.h>
