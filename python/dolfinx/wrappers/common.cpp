@@ -48,11 +48,13 @@ void common(py::module& m)
              std::shared_ptr<dolfinx::common::IndexMap>>(m, "IndexMap")
       .def(py::init(
           [](const MPICommWrapper comm, std::int32_t local_size,
+             const std::vector<int>& dest_ranks,
              const Eigen::Ref<
                  const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>>& ghosts,
-             std::vector<int> ghost_owners, int block_size) {
+             const std::vector<int>& ghost_owners, int block_size) {
             return std::make_shared<dolfinx::common::IndexMap>(
-                comm.get(), local_size, ghosts, ghost_owners, block_size);
+                comm.get(), local_size, dest_ranks, ghosts, ghost_owners,
+                block_size);
           }))
       .def_property_readonly("size_local",
                              &dolfinx::common::IndexMap::size_local)
@@ -66,8 +68,7 @@ void common(py::module& m)
       .def_property_readonly("local_range",
                              &dolfinx::common::IndexMap::local_range,
                              "Range of indices owned by this map")
-      .def("ghost_owners", &dolfinx::common::IndexMap::ghost_owners,
-           py::return_value_policy::reference_internal,
+      .def("ghost_owner_rank", &dolfinx::common::IndexMap::ghost_owner_rank,
            "Return owning process for each ghost index")
       .def_property_readonly("ghosts", &dolfinx::common::IndexMap::ghosts,
                              py::return_value_policy::reference_internal,
