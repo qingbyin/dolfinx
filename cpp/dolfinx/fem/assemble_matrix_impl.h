@@ -168,7 +168,8 @@ void assemble_cells(
     const bool needs_permutation_data)
 {
   const int gdim = mesh.geometry().dim();
-  mesh.topology_mutable().create_entity_permutations();
+  if (needs_permutation_data)
+    mesh.topology_mutable().create_entity_permutations();
 
   // Prepare cell geometry
   const graph::AdjacencyList<std::int32_t>& x_dofmap = mesh.geometry().dofmap();
@@ -200,9 +201,16 @@ void assemble_cells(
 
     // Tabulate tensor
     std::fill(Ae.data(), Ae.data() + num_dofs0 * num_dofs1, 0);
-    kernel(Ae.data(), coeffs.row(c).data(), constants.data(),
-           coordinate_dofs.data(), nullptr, nullptr, cell_info[c]);
-
+    if (needs_permutation_data)
+    {
+      kernel(Ae.data(), coeffs.row(c).data(), constants.data(),
+             coordinate_dofs.data(), nullptr, nullptr, cell_info[c]);
+    }
+    else
+    {
+      kernel(Ae.data(), coeffs.row(c).data(), constants.data(),
+             coordinate_dofs.data(), nullptr, nullptr, {});
+    }
     // Zero rows/columns for essential bcs
     auto dofs0 = dofmap0.links(c);
     auto dofs1 = dofmap1.links(c);
@@ -248,7 +256,8 @@ void assemble_exterior_facets(
   // FIXME: cleanup these calls? Some of the happen internally again.
   mesh.topology_mutable().create_entities(tdim - 1);
   mesh.topology_mutable().create_connectivity(tdim - 1, tdim);
-  mesh.topology_mutable().create_entity_permutations();
+  if (needs_permutation_data)
+    mesh.topology_mutable().create_entity_permutations();
 
   // Prepare cell geometry
   const graph::AdjacencyList<std::int32_t>& x_dofmap = mesh.geometry().dofmap();
@@ -296,9 +305,16 @@ void assemble_exterior_facets(
     // Tabulate tensor
     const std::uint8_t perm = perms(local_facet, cells[0]);
     std::fill(Ae.data(), Ae.data() + num_dofs0 * num_dofs1, 0);
-    kernel(Ae.data(), coeffs.row(cells[0]).data(), constants.data(),
-           coordinate_dofs.data(), &local_facet, &perm, cell_info[cells[0]]);
-
+    if (needs_permutation_data)
+    {
+      kernel(Ae.data(), coeffs.row(cells[0]).data(), constants.data(),
+             coordinate_dofs.data(), &local_facet, &perm, cell_info[cells[0]]);
+    }
+    else
+    {
+      kernel(Ae.data(), coeffs.row(cells[0]).data(), constants.data(),
+             coordinate_dofs.data(), &local_facet, nullptr, {});
+    }
     // Zero rows/columns for essential bcs
     auto dmap0 = dofmap0.links(cells[0]);
     auto dmap1 = dofmap1.links(cells[0]);
