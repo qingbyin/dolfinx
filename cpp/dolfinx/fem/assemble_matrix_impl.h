@@ -188,7 +188,9 @@ void assemble_cells(
       num_dofs0, num_dofs1);
 
   const Eigen::Array<std::uint32_t, Eigen::Dynamic, 1>& cell_info
-      = mesh.topology().get_cell_permutation_info();
+      = needs_permutation_data
+            ? mesh.topology().get_cell_permutation_info()
+            : Eigen::Array<std::uint32_t, Eigen::Dynamic, 1>(0);
 
   // Iterate over active cells
   for (std::int32_t c : active_cells)
@@ -276,9 +278,13 @@ void assemble_exterior_facets(
       num_dofs0, num_dofs1);
 
   const Eigen::Array<std::uint8_t, Eigen::Dynamic, Eigen::Dynamic>& perms
-      = mesh.topology().get_facet_permutations();
+      = needs_permutation_data
+            ? mesh.topology().get_facet_permutations()
+            : Eigen::Array<std::uint8_t, Eigen::Dynamic, Eigen::Dynamic>(0, 0);
   const Eigen::Array<std::uint32_t, Eigen::Dynamic, 1>& cell_info
-      = mesh.topology().get_cell_permutation_info();
+      = needs_permutation_data
+            ? mesh.topology().get_cell_permutation_info()
+            : Eigen::Array<std::uint32_t, Eigen::Dynamic, 1>(0);
 
   // Iterate over all facets
   auto f_to_c = mesh.topology().connectivity(tdim - 1, tdim);
@@ -303,10 +309,10 @@ void assemble_exterior_facets(
         coordinate_dofs(i, j) = x_g(x_dofs[i], j);
 
     // Tabulate tensor
-    const std::uint8_t perm = perms(local_facet, cells[0]);
     std::fill(Ae.data(), Ae.data() + num_dofs0 * num_dofs1, 0);
     if (needs_permutation_data)
     {
+      const std::uint8_t perm = perms(local_facet, cells[0]);
       kernel(Ae.data(), coeffs.row(cells[0]).data(), constants.data(),
              coordinate_dofs.data(), &local_facet, &perm, cell_info[cells[0]]);
     }
@@ -384,9 +390,13 @@ void assemble_interior_facets(
   Eigen::Array<std::int32_t, Eigen::Dynamic, 1> dmapjoint0, dmapjoint1;
 
   const Eigen::Array<std::uint8_t, Eigen::Dynamic, Eigen::Dynamic>& perms
-      = mesh.topology().get_facet_permutations();
+      = needs_permutation_data
+            ? mesh.topology().get_facet_permutations()
+            : Eigen::Array<std::uint8_t, Eigen::Dynamic, Eigen::Dynamic>(0, 0);
   const Eigen::Array<std::uint32_t, Eigen::Dynamic, 1>& cell_info
-      = mesh.topology().get_cell_permutation_info();
+      = needs_permutation_data
+            ? mesh.topology().get_cell_permutation_info()
+            : Eigen::Array<std::uint32_t, Eigen::Dynamic, 1>(0);
 
   // Iterate over all facets
   auto c = mesh.topology().connectivity(tdim - 1, tdim);
