@@ -128,6 +128,10 @@ public:
   std::shared_ptr<const FiniteElement>
   extract_sub_element(const std::vector<int>& component) const;
 
+  /// Returns a bool indicating whether or not permutation data needs to be
+  /// passed into FFCx for this element
+  bool needs_permutation_data() const { return _needs_permutation_data; }
+
 private:
   std::string _signature, _family;
 
@@ -166,5 +170,7 @@ private:
   std::function<int(ufc_scalar_t*, const ufc_scalar_t*, const double*,
                     const ufc_coordinate_mapping*)>
       _transform_values;
+
+  bool _needs_permutation_data;
 };
 } // namespace dolfinx::fem

@@ -28,7 +28,8 @@ FiniteElement::FiniteElement(const ufc_finite_element& ufc_element)
           ufc_element.evaluate_reference_basis_derivatives),
       _transform_reference_basis_derivatives(
           ufc_element.transform_reference_basis_derivatives),
-      _transform_values(ufc_element.transform_values)
+      _transform_values(ufc_element.transform_values),
+      _needs_permutation_data(ufc_element.needs_permutation_data)
 {
   // Store dof coordinates on reference element if they exist
   assert(ufc_element.tabulate_reference_dof_coordinates);
