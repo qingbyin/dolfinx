@@ -12,11 +12,8 @@
 #include <dolfinx/fem/utils.h>
 #include <dolfinx/graph/AdjacencyList.h>
 
-using namespace dolfinx;
-using namespace dolfinx::la;
-
 //-----------------------------------------------------------------------------
-SparsityPattern::SparsityPattern(
+dolfinx::la::SparsityPattern::SparsityPattern(
     MPI_Comm comm,
     const std::array<std::shared_ptr<const common::IndexMap>, 2>& index_maps)
     : _mpi_comm(comm), _index_maps(index_maps)
@@ -28,7 +25,7 @@ SparsityPattern::SparsityPattern(
   _off_diagonal_cache.resize(local_size0);
 }
 //-----------------------------------------------------------------------------
-SparsityPattern::SparsityPattern(
+dolfinx::la::SparsityPattern::SparsityPattern(
     MPI_Comm comm,
     const std::vector<std::vector<const SparsityPattern*>>& patterns,
     const std::array<
@@ -169,20 +166,21 @@ SparsityPattern::SparsityPattern(
   }
 }
 //-----------------------------------------------------------------------------
-std::array<std::int64_t, 2> SparsityPattern::local_range(int dim) const
+std::array<std::int64_t, 2>
+dolfinx::la::SparsityPattern::local_range(int dim) const
 {
   const int bs = _index_maps.at(dim)->block_size();
   const std::array lrange = _index_maps[dim]->local_range();
   return {bs * lrange[0], bs * lrange[1]};
 }
 //-----------------------------------------------------------------------------
-std::shared_ptr<const common::IndexMap>
-SparsityPattern::index_map(int dim) const
+std::shared_ptr<const dolfinx::common::IndexMap>
+dolfinx::la::SparsityPattern::index_map(int dim) const
 {
   return _index_maps.at(dim);
 }
 //-----------------------------------------------------------------------------
-void SparsityPattern::insert(
+void dolfinx::la::SparsityPattern::insert(
     const Eigen::Ref<const Eigen::Array<std::int32_t, Eigen::Dynamic, 1>>& rows,
     const Eigen::Ref<const Eigen::Array<std::int32_t, Eigen::Dynamic, 1>>& cols)
 {
@@ -227,7 +225,7 @@ void SparsityPattern::insert(
   }
 }
 //-----------------------------------------------------------------------------
-void SparsityPattern::insert_diagonal(
+void dolfinx::la::SparsityPattern::insert_diagonal(
     const Eigen::Ref<const Eigen::Array<std::int32_t, Eigen::Dynamic, 1>>& rows)
 {
   if (_diagonal)
@@ -252,7 +250,7 @@ void SparsityPattern::insert_diagonal(
   }
 }
 //-----------------------------------------------------------------------------
-void SparsityPattern::assemble()
+void dolfinx::la::SparsityPattern::assemble()
 {
   if (_diagonal)
     throw std::runtime_error("Sparsity pattern has already been finalised.");
@@ -266,6 +264,9 @@ void SparsityPattern::assemble()
   const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>& ghosts0
       = _index_maps[0]->ghosts();
 
+  const Eigen::Array<std::int32_t, Eigen::Dynamic, 1>& ghost_owners
+      = _index_maps[0]->ghost_owner_rank();
+
   assert(_index_maps[1]);
   const int bs1 = _index_maps[1]->block_size();
   const std::int32_t local_size1 = _index_maps[1]->size_local();
@@ -273,71 +274,82 @@ void SparsityPattern::assemble()
   const Eigen::Array<std::int64_t, Eigen::Dynamic, 1>& ghosts1
       = _index_maps[1]->ghosts();
 
+  MPI_Comm comm = _index_maps[0]->comm(common::IndexMap::Direction::forward);
+  int indegree(-1), outdegree(-2), weighted(-1);
+  MPI_Dist_graph_neighbors_count(comm, &indegree, &outdegree, &weighted);
+
+  auto [source, dest] = dolfinx::MPI::neighbors(comm);
+
   // For each ghost row, pack and send (global row, global col) pairs to
   // send to neighborhood
-  std::vector<std::int64_t> ghost_data;
+  std::vector<std::vector<std::int64_t>> ghost_data(outdegree);
   for (int i = 0; i < num_ghosts0; ++i)
   {
     const std::int64_t row_node_global = ghosts0[i];
     const std::int32_t row_node_local = local_size0 + i;
     for (int j = 0; j < bs0; ++j)
     {
+      const std::int32_t p = ghost_owners[i];
+      const auto it = std::find(dest.begin(), dest.end(), p);
+      assert(it != dest.end());
+      const int np = std::distance(dest.begin(), it);
+
       const std::int64_t row_global = bs0 * row_node_global + j;
       const std::int32_t row_local = bs0 * row_node_local + j;
       assert((std::size_t)row_local < _diagonal_cache.size());
       const std::vector<std::int32_t>& cols = _diagonal_cache[row_local];
-      for (std::size_t c = 0; c < cols.size(); ++c)
+      for (std::int32_t col : cols)
       {
-        ghost_data.push_back(row_global);
+        ghost_data[np].push_back(row_global);
 
         // Convert to global column index
-        if (cols[c] < bs1 * local_size1)
-          ghost_data.push_back(cols[c] + bs1 * local_range1[0]);
+        if (col < bs1 * local_size1)
+          ghost_data[np].push_back(col + bs1 * local_range1[0]);
         else
         {
-          const std::div_t div = std::div(cols[c], bs1);
+          const std::div_t div = std::div(col, bs1);
           const std::int64_t block_global = ghosts1[div.quot - local_size1];
-          ghost_data.push_back(bs1 * block_global + div.rem);
+          ghost_data[np].push_back(bs1 * block_global + div.rem);
         }
       }
 
       const std::vector<std::int64_t>& cols_off
           = _off_diagonal_cache[row_local];
-      for (std::size_t c = 0; c < cols_off.size(); ++c)
+      for (std::int64_t col : cols_off)
       {
-        ghost_data.push_back(row_global);
-        ghost_data.push_back(cols_off[c]);
+        ghost_data[np].push_back(row_global);
+        ghost_data[np].push_back(col);
       }
     }
   }
 
-  MPI_Comm comm = _index_maps[0]->comm(common::IndexMap::Direction::symmetric);
-  int num_neighbors(-1), outdegree(-2), weighted(-1);
-  MPI_Dist_graph_neighbors_count(comm, &num_neighbors, &outdegree, &weighted);
-  assert(num_neighbors == outdegree);
+  std::vector<std::int64_t> send_data;
+  std::vector<std::int32_t> send_count;
+  for (const auto& sub : ghost_data)
+  {
+    send_data.insert(send_data.end(), sub.begin(), sub.end());
+    send_count.push_back(sub.size());
+  }
 
-  // Figure out how much data to receive from each neighbor
-  const int num_my_rows = ghost_data.size();
-  std::vector<int> num_rows_recv(num_neighbors);
-  MPI_Neighbor_allgather(&num_my_rows, 1, MPI_INT, num_rows_recv.data(), 1,
-                         MPI_INT, comm);
+  // Compute displacements for data to send
+  std::vector<int> send_disp(outdegree + 1, 0);
+  std::partial_sum(send_count.begin(), send_count.end(), send_disp.begin() + 1);
+
+  std::vector<std::int32_t> num_rows_recv(indegree);
+  MPI_Neighbor_alltoall(send_count.data(), 1, MPI_INT32_T, num_rows_recv.data(),
+                        1, MPI_INT32_T, comm);
 
   // Compute displacements for data to receive
-  std::vector<int> disp(num_neighbors + 1, 0);
+  std::vector<int> recv_disp(indegree + 1, 0);
   std::partial_sum(num_rows_recv.begin(), num_rows_recv.end(),
-                   disp.begin() + 1);
+                   recv_disp.begin() + 1);
 
-  // NOTE: Send unowned rows to all neighbors could be a bit 'lazy' and
-  // MPI_Neighbor_alltoallv could be used to send just to the owner, but
-  // maybe the number of rows exchanged in the neighborhood are
-  // relatively small that MPI_Neighbor_allgatherv is simpler.
-
-  // Send all unowned rows to neighbors, and receive rows from
-  // neighbors
-  std::vector<std::int64_t> ghost_data_received(disp.back());
-  MPI_Neighbor_allgatherv(ghost_data.data(), ghost_data.size(), MPI_INT64_T,
-                          ghost_data_received.data(), num_rows_recv.data(),
-                          disp.data(), MPI_INT64_T, comm);
+  // Send unowned rows to neighbours, and receive rows from neighbours
+  std::vector<std::int64_t> ghost_data_received(recv_disp.back());
+  MPI_Neighbor_alltoallv(send_data.data(), send_count.data(), send_disp.data(),
+                         MPI_INT64_T, ghost_data_received.data(),
+                         num_rows_recv.data(), recv_disp.data(), MPI_INT64_T,
+                         comm);
 
   // Add data received from the neighborhood
   for (std::size_t i = 0; i < ghost_data_received.size(); i += 2)
@@ -382,7 +394,7 @@ void SparsityPattern::assemble()
   std::vector<std::vector<std::int64_t>>().swap(_off_diagonal_cache);
 }
 //-----------------------------------------------------------------------------
-std::int64_t SparsityPattern::num_nonzeros() const
+std::int64_t dolfinx::la::SparsityPattern::num_nonzeros() const
 {
   if (!_diagonal)
     throw std::runtime_error("Sparsity pattern has not be assembled.");
@@ -390,21 +402,24 @@ std::int64_t SparsityPattern::num_nonzeros() const
   return _diagonal->array().rows() + _off_diagonal->array().rows();
 }
 //-----------------------------------------------------------------------------
-const graph::AdjacencyList<std::int32_t>&
-SparsityPattern::diagonal_pattern() const
+const dolfinx::graph::AdjacencyList<std::int32_t>&
+dolfinx::la::SparsityPattern::diagonal_pattern() const
 {
   if (!_diagonal)
     throw std::runtime_error("Sparsity pattern has not been finalised.");
   return *_diagonal;
 }
 //-----------------------------------------------------------------------------
-const graph::AdjacencyList<std::int64_t>&
-SparsityPattern::off_diagonal_pattern() const
+const dolfinx::graph::AdjacencyList<std::int64_t>&
+dolfinx::la::SparsityPattern::off_diagonal_pattern() const
 {
   if (!_off_diagonal)
     throw std::runtime_error("Sparsity pattern has not been finalised.");
   return *_off_diagonal;
 }
 //-----------------------------------------------------------------------------
-MPI_Comm SparsityPattern::mpi_comm() const { return _mpi_comm.comm(); }
+MPI_Comm dolfinx::la::SparsityPattern::mpi_comm() const
+{
+  return _mpi_comm.comm();
+}
 //-----------------------------------------------------------------------------

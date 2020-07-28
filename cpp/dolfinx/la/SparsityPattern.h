@@ -59,6 +59,7 @@ public:
           maps);
 
   SparsityPattern(const SparsityPattern& pattern) = delete;
+  SparsityPattern& operator=(const SparsityPattern& pattern) = delete;
 
   /// Move constructor
   SparsityPattern(SparsityPattern&& pattern) = default;
@@ -70,10 +71,11 @@ public:
   SparsityPattern& operator=(SparsityPattern&& pattern) = default;
 
   /// Return local range for dimension dim
-  std::array<std::int64_t, 2> local_range(int dim) const;
+  [[nodiscard]] std::array<std::int64_t, 2> local_range(int dim) const;
 
   /// Return index map for dimension dim
-  std::shared_ptr<const common::IndexMap> index_map(int dim) const;
+  [[nodiscard]] std::shared_ptr<const common::IndexMap>
+  index_map(int dim) const;
 
   /// Insert non-zero locations using local (process-wise) indices
   void
@@ -93,18 +95,20 @@ public:
   void assemble();
 
   /// Return number of local nonzeros
-  std::int64_t num_nonzeros() const;
+  [[nodiscard]] std::int64_t num_nonzeros() const;
 
   /// Sparsity pattern for the owned (diagonal) block. Uses local
   /// indices for the columns.
-  const graph::AdjacencyList<std::int32_t>& diagonal_pattern() const;
+  [[nodiscard]] const graph::AdjacencyList<std::int32_t>&
+  diagonal_pattern() const;
 
   /// Sparsity pattern for the un-owned (off-diagonal) columns. Uses global
   /// indices for the columns.
-  const graph::AdjacencyList<std::int64_t>& off_diagonal_pattern() const;
+  [[nodiscard]] const graph::AdjacencyList<std::int64_t>&
+  off_diagonal_pattern() const;
 
   /// Return MPI communicator
-  MPI_Comm mpi_comm() const;
+  [[nodiscard]] MPI_Comm mpi_comm() const;
 
 private:
   // MPI communicator
