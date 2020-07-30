@@ -50,6 +50,8 @@ build_basic_dofmap(const mesh::Topology& topology,
   // Topological dimension
   const int D = topology.dim();
 
+  const int element_block_size = element_dof_layout.block_size();
+
   // Generate and number required mesh entities
   std::vector<bool> needs_entities(D + 1, false);
   std::vector<std::int32_t> num_mesh_entities_local(D + 1, 0),
@@ -99,9 +101,10 @@ build_basic_dofmap(const mesh::Topology& topology,
 
   // Allocate dofmap memory
   const int num_cells = topology.connectivity(D, 0)->num_nodes();
-  Eigen::Array<std::int32_t, Eigen::Dynamic, 1> dofs(num_cells * local_dim);
+  Eigen::Array<std::int32_t, Eigen::Dynamic, 1> dofs(num_cells * local_dim
+                                                     * element_block_size);
   Eigen::Array<std::int32_t, Eigen::Dynamic, 1> cell_ptr(num_cells + 1);
-  cell_ptr = local_dim;
+  cell_ptr = local_dim * element_block_size;
   cell_ptr[0] = 0;
   std::partial_sum(cell_ptr.data() + 1, cell_ptr.data() + cell_ptr.rows(),
                    cell_ptr.data() + 1);
@@ -126,10 +129,11 @@ build_basic_dofmap(const mesh::Topology& topology,
       = fem::compute_dof_permutations(topology, element_dof_layout);
 
   // Storage for local-to-global map
-  std::vector<std::int64_t> local_to_global(local_size);
+  std::vector<std::int64_t> local_to_global(local_size * element_block_size);
 
   // Dof (dim, entity index) marker
-  std::vector<std::pair<std::int8_t, std::int32_t>> dof_entity(local_size);
+  std::vector<std::pair<std::int8_t, std::int32_t>> dof_entity(
+      local_size * element_block_size);
 
   // Loops over cells and build dofmaps from ElementDofmap
   for (int c = 0; c < connectivity[0]->num_nodes(); ++c)
@@ -183,11 +187,18 @@ build_basic_dofmap(const mesh::Topology& topology,
           const std::int32_t count = std::distance(e_dofs->begin(), dof_local);
           const std::int32_t dof
               = offset_local + num_entity_dofs * e_index_local + count;
-          dofs[cell_ptr[c] + permutations(c, *dof_local)] = dof;
-          local_to_global[dof]
-              = offset_global + num_entity_dofs * e_index_global + count;
-          dof_entity[dof] = {d, e_index_local};
-        }
+          for (int block = 0; block < element_block_size; ++block)
+          {
+            dofs[cell_ptr[c] + permutations(c, *dof_local) * element_block_size
+                 + block]
+                = dof * element_block_size + block;
+            local_to_global[dof * element_block_size + block]
+                = (offset_global + num_entity_dofs * e_index_global + count)
+                      * element_block_size
+                  + block;
+            dof_entity[dof * element_block_size + block] = {d, e_index_local};
+          }
+      }
       }
       offset_local += entity_dofs[d][0].size() * num_mesh_entities_local[d];
       offset_global += entity_dofs[d][0].size() * num_mesh_entities_global[d];
@@ -545,7 +556,7 @@ DofMapBuilder::build(MPI_Comm comm, const mesh::Topology& topology,
   //        It should come from the ElementDofLayout.
   // Build re-ordered dofmap, accounting for block size
   Eigen::Array<std::int32_t, Eigen::Dynamic, 1> dofmap(
-      node_graph0.array().rows() * element_block_size);
+      node_graph0.array().rows());
 
   const int mixed_blocks = element_block_size / block_size;
 
@@ -559,12 +570,8 @@ DofMapBuilder::build(MPI_Comm comm, const mesh::Topology& topology,
       const std::int32_t new_node = old_to_new[old_node];
       for (std::int32_t mix = 0; mix < mixed_blocks; ++mix)
       {
-        for (std::int32_t block = 0; block < block_size; ++block)
-        {
-          dofmap[block_size * local_dim0 * mixed_blocks * cell
-                 + block_size * local_dim0 * mix + block_size * j + block]
-              = mixed_blocks * block_size * new_node + block_size * mix + block;
-        }
+        dofmap[local_dim0 * mixed_blocks * cell + local_dim0 * mix + j]
+            = mixed_blocks * new_node + mix;
       }
     }
     }
